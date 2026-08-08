@@ -9,9 +9,12 @@ locations, formats, and open questions this is based on.
 """
 
 import glob
+import json
 import os
 import re
 import sys
+import urllib.error
+import urllib.request
 
 try:
     import msgpack
@@ -19,6 +22,52 @@ except ImportError:
     raise SystemExit("Missing dependency. Run: pip install msgpack --break-system-packages")
 
 PARSER_VERSION = "0.1.0"
+
+
+def _parse_version(v):
+    """'v0.1.1' or '0.1.1' -> (0, 1, 1) for numeric comparison. Non-numeric
+    segments (a stray suffix like '0.1.1-beta') become 0 rather than raising --
+    this only needs to be good enough to detect "newer", not a full semver parser."""
+    parts = []
+    for p in v.lstrip("vV").split("."):
+        try:
+            parts.append(int(p))
+        except ValueError:
+            parts.append(0)
+    return tuple(parts)
+
+
+def check_for_update(api_url, timeout=3.0):
+    """Best-effort update check, added 2026-08-08. grp (this tool's source repo)
+    is private, so end-user machines can't hit GitHub's releases API without a
+    credential embedded in the distributed binary -- instead this checks
+    <api_url>/downloads/latest_version.json, a small static file on the same
+    site GUILDRUN_API_URL already points to (kept in step with the release
+    binaries in Client/public/downloads/ -- update both by hand when cutting a
+    release, see PROJECT_SUMMARY.md).
+
+    Notify-only by design (see PROJECT_SUMMARY.md's 2026-08-08 discussion):
+    prints a message and returns True if a newer version is available, but
+    never downloads or replaces anything itself. Never raises -- no api_url
+    configured, the site being unreachable, or a malformed response are all
+    just "no update available" to a courtesy check that shouldn't block
+    startup."""
+    if not api_url:
+        return False
+    try:
+        url = f"{api_url.rstrip('/')}/downloads/latest_version.json"
+        req = urllib.request.Request(url, headers={"user-agent": "guildrun-run-parser"})
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+        latest = str(data.get("version") or "")
+        if latest and _parse_version(latest) > _parse_version(PARSER_VERSION):
+            print(f"\nA new version of GRP is available: v{latest} (you have v{PARSER_VERSION}).")
+            print(f"Download it from {api_url.rstrip('/')}/\n")
+            return True
+        return False
+    except Exception:
+        return False
+
 
 CONFIG_TEMPLATE = """\
 # Guildrun Run Parser (GRP) configuration.

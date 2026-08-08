@@ -598,6 +598,7 @@ def main():
         print(f"Uploading to {uploader.API_URL} at most every {args.sync_every}s.")
     else:
         print("Uploading disabled (set GUILDRUN_API_URL to enable).")
+    gc.check_for_update(uploader.API_URL)
     print("Press Ctrl+C to stop.\n")
 
     try:
