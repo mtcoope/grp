@@ -28,7 +28,7 @@ try:
 except ImportError:
     raise SystemExit("Missing dependency. Run: pip install certifi --break-system-packages")
 
-PARSER_VERSION = "0.1.1"
+PARSER_VERSION = "0.1.2"
 
 # Explicit CA bundle for every HTTPS request GRP makes, added 2026-08-08 after
 # a real report: Python's ssl module falls back to an OS-provided trust store
