@@ -2,15 +2,18 @@
 Guildrun Step 3 uploader.
 
 Required, as of 2026-08-08 -- GRP no longer runs without GUILDRUN_API_URL
-(e.g. http://localhost:3000) and GUILDRUN_API_KEY (a personal, per-player
-upload key generated from the player's own profile page on the site --
-matches an upload_api_key_hash row in Application/Server, see
-Server/.env.example) set. Comes from environment variables or config.env
-next to this script/executable; if either is missing at startup,
+and GUILDRUN_API_KEY set. GUILDRUN_API_URL defaults to the real hosted site
+(guildrunlogs.app, see guildrun_common.DEFAULT_API_URL/get_api_url) and
+normally never needs setting -- override via environment variable or
+config.env only to point at something else (e.g. http://localhost:3000
+during development). GUILDRUN_API_KEY is a personal, per-player upload key
+generated from the player's own profile page on the site (matches an
+upload_api_key_hash row in Application/Server, see Server/.env.example)
+and has no default; if it's missing at startup,
 guildrun_state_watcher.main() prompts for it interactively and saves the
 answer to config.env (see guildrun_common.ensure_credentials) rather than
 requiring a terminal-less user to hand-edit a file. Environment variables
-win if both are set.
+win over config.env for both.
 
 Talks to the two write endpoints in Application/Server/src/app.js:
   POST /api/runs                 -- announce/re-announce run metadata. Called
@@ -36,7 +39,7 @@ from datetime import datetime, timezone
 import guildrun_common as gc
 
 _config = gc.load_config()
-API_URL = gc.get_setting("GUILDRUN_API_URL", _config).rstrip("/")
+API_URL = gc.get_api_url(_config).rstrip("/")
 API_KEY = gc.get_setting("GUILDRUN_API_KEY", _config)
 TIMEOUT = 5.0
 

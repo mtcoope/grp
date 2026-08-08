@@ -70,14 +70,18 @@ def check_for_update(api_url, timeout=3.0):
         return False
 
 
-CONFIG_TEMPLATE = """\
+DEFAULT_API_URL = "https://guildrunlogs.app"
+
+CONFIG_TEMPLATE = f"""\
 # Guildrun Run Parser (GRP) configuration.
 #
-# GRP prompts you for GUILDRUN_API_URL and GUILDRUN_API_KEY the first time
-# it runs without them and saves your answers below -- you shouldn't
-# normally need to touch those two lines by hand. If you ever need to
-# change them later (new key, different site), edit them directly here and
-# restart GRP.
+# GUILDRUN_API_URL is pre-set to the official site below -- you shouldn't
+# normally need to touch it (only change it if you're pointing GRP at a
+# different server, e.g. for local development). GRP prompts you for
+# GUILDRUN_API_KEY the first time it runs without one and saves your answer
+# here, so you shouldn't need to touch that by hand either. If you ever
+# need to change either later (new key, different site), edit them
+# directly here and restart GRP.
 #
 # GRP looks for your Guildrun save data in its usual OS-specific location
 # automatically -- you should NOT need to touch GUILDRUN_DATA_DIR below. If
@@ -92,7 +96,7 @@ CONFIG_TEMPLATE = """\
 # Environment variables of the same name, if set, always override this file
 # (and are never prompted for or written here).
 
-GUILDRUN_API_URL=
+GUILDRUN_API_URL={DEFAULT_API_URL}
 GUILDRUN_API_KEY=
 GUILDRUN_DATA_DIR=
 """
@@ -189,6 +193,16 @@ def get_setting(key, config):
     return os.environ.get(key) or config.get(key, "")
 
 
+def get_api_url(config):
+    """Resolves GUILDRUN_API_URL: environment variable, then config.env,
+    then DEFAULT_API_URL. There's no interactive prompt for this (unlike
+    GUILDRUN_API_KEY) since guildrunlogs.app is real and hosted now -- there's
+    one official site, not a per-player value to ask for. Still overridable
+    via env var or config.env, e.g. for local development against
+    http://localhost:3000."""
+    return get_setting("GUILDRUN_API_URL", config) or DEFAULT_API_URL
+
+
 def _write_config_values(updates):
     """Rewrites specific KEY=value lines in config.env in place, leaving
     everything else (comments, GUILDRUN_DATA_DIR, formatting) untouched --
@@ -221,34 +235,28 @@ def _write_config_values(updates):
 
 
 def ensure_credentials(config):
-    """GRP requires GUILDRUN_API_URL and GUILDRUN_API_KEY to run at all
-    (added 2026-08-08 -- there's no more local-only mode). If either is
-    missing from both the environment and config.env, prompts for it in the
-    terminal and saves the answer to config.env so it isn't asked again.
-    Environment variables are never prompted for or written back (they
-    already win over the file per get_setting, and overwriting the file
-    with an env-sourced value would be surprising if the env var were later
-    unset). Returns the config dict with both keys present."""
-    url = get_setting("GUILDRUN_API_URL", config)
+    """GRP requires GUILDRUN_API_KEY to run at all (added 2026-08-08 --
+    there's no more local-only mode). GUILDRUN_API_URL is no longer part of
+    this prompt (removed 2026-08-08 now that guildrunlogs.app is real and
+    hosted -- see get_api_url) -- only the per-player key is ever missing
+    in a way that needs asking. If the key is missing from both the
+    environment and config.env, prompts for it in the terminal and saves
+    the answer to config.env so it isn't asked again. An env-var-sourced
+    key is never prompted for or written back (it already wins over the
+    file per get_setting, and overwriting the file with an env-sourced
+    value would be surprising if the env var were later unset). Returns
+    the config dict with the key present."""
     key = get_setting("GUILDRUN_API_KEY", config)
-    if url and key:
+    if key:
         return config
 
-    print("GRP needs an upload URL and key to run -- it no longer runs in a local-only mode.")
-    updates = {}
-    if not url:
-        while not url:
-            url = input("  GUILDRUN_API_URL (the site's address, e.g. https://guildrunlogs.example.com): ").strip()
-        updates["GUILDRUN_API_URL"] = url
-        config["GUILDRUN_API_URL"] = url
-    if not key:
-        while not key:
-            key = input("  GUILDRUN_API_KEY (generate one from your profile page on the site): ").strip()
-        updates["GUILDRUN_API_KEY"] = key
-        config["GUILDRUN_API_KEY"] = key
+    print("GRP needs your upload key to run -- it no longer runs in a local-only mode.")
+    while not key:
+        key = input("  GUILDRUN_API_KEY (generate one from your profile page on the site): ").strip()
+    config["GUILDRUN_API_KEY"] = key
 
-    _write_config_values(updates)
-    print(f"Saved to {CONFIG_PATH} -- edit that file any time to change these.\n")
+    _write_config_values({"GUILDRUN_API_KEY": key})
+    print(f"Saved to {CONFIG_PATH} -- edit that file any time to change this.\n")
     return config
 
 

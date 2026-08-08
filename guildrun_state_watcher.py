@@ -21,11 +21,13 @@ useful corroborating evidence for whether a just-ended run was a win.
 
 Uploads to the Step 3 REST server (Application/Server) via
 guildrun_uploader.py -- required, not optional (as of 2026-08-08 there's no
-local-only mode). GUILDRUN_API_URL and GUILDRUN_API_KEY come from the
-environment or config.env next to this script/executable; if either is
-missing, main() prompts for it interactively on startup and saves the
-answer to config.env (see guildrun_common.ensure_credentials) so it isn't
-asked again. Environment variables win if both are set. Syncs at most every
+local-only mode). GUILDRUN_API_URL defaults to the real hosted site
+(guildrunlogs.app, see guildrun_common.DEFAULT_API_URL) and normally never
+needs setting. GUILDRUN_API_KEY is per-player and has no default -- if it's
+missing from the environment or config.env, main() prompts for it
+interactively on startup and saves the answer to config.env (see
+guildrun_common.ensure_credentials) so it isn't asked again. Environment
+variables win over config.env for both. Syncs at most every
 --sync-every seconds while a run is active, plus once immediately whenever a
 run ends (its final status/ended_at) or gets retroactively corrected by the
 profile-diff victory fix-up.
@@ -42,13 +44,15 @@ unsynced run's local copy (its only copy) is never deleted regardless of age.
 
 Usage:
   pip install msgpack --break-system-packages
-  python3 guildrun_state_watcher.py                     # prompts for GUILDRUN_API_URL/KEY on first run
+  python3 guildrun_state_watcher.py                     # prompts for GUILDRUN_API_KEY on first run
   python3 guildrun_state_watcher.py --interval 1
   python3 guildrun_state_watcher.py --snapshot-every 30  # periodic full-state checkpoint cadence, seconds
   python3 guildrun_state_watcher.py --keep-runs 100      # local run history to retain (0 disables cleanup)
 
-  # To skip the interactive prompt (e.g. scripted/CI use), set both up front,
-  # either as environment variables or in config.env:
+  # To skip the interactive prompt (e.g. scripted/CI use), set the key up
+  # front, either as an environment variable or in config.env. Only needed
+  # for GUILDRUN_API_URL too if pointing at something other than the real
+  # site (e.g. a local Server/ instance during development):
   export GUILDRUN_API_URL=http://localhost:3000
   export GUILDRUN_API_KEY=dev-local-key    # must match Server/.env's UPLOAD_API_KEY
   python3 guildrun_state_watcher.py --sync-every 10
@@ -583,7 +587,7 @@ def main():
     # uploader.API_URL/API_KEY were already computed once at import time
     # (before config.env necessarily had real values, or before the prompt
     # above ran) -- refresh them now that credentials are guaranteed present.
-    uploader.API_URL = gc.get_setting("GUILDRUN_API_URL", config).rstrip("/")
+    uploader.API_URL = gc.get_api_url(config).rstrip("/")
     uploader.API_KEY = gc.get_setting("GUILDRUN_API_KEY", config)
 
     print(gc.diagnose_data_paths() + "\n")
