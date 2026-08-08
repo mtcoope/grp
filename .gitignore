@@ -1,0 +1,7 @@
+__pycache__/
+*.pyc
+.DS_Store
+.env
+
+# Personal gameplay data captured by the watcher -- never commit this.
+run_data/
