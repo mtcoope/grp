@@ -1,13 +1,16 @@
 """
 Guildrun Step 3 uploader.
 
-Optional, off by default. Enabled by setting GUILDRUN_API_URL (e.g.
-http://localhost:3000) and GUILDRUN_API_KEY (matches Application/Server/.env's
-UPLOAD_API_KEY -- a placeholder shared secret, not per-player auth -- see
-Server/.env.example), either as environment variables or in config.env next
-to this script/executable (see guildrun_common.ensure_config_template) --
-added 2026-08-08 so a packaged .exe has somewhere to put these without a
-terminal. Environment variables win if both are set.
+Required, as of 2026-08-08 -- GRP no longer runs without GUILDRUN_API_URL
+(e.g. http://localhost:3000) and GUILDRUN_API_KEY (a personal, per-player
+upload key generated from the player's own profile page on the site --
+matches an upload_api_key_hash row in Application/Server, see
+Server/.env.example) set. Comes from environment variables or config.env
+next to this script/executable; if either is missing at startup,
+guildrun_state_watcher.main() prompts for it interactively and saves the
+answer to config.env (see guildrun_common.ensure_credentials) rather than
+requiring a terminal-less user to hand-edit a file. Environment variables
+win if both are set.
 
 Talks to the two write endpoints in Application/Server/src/app.js:
   POST /api/runs                 -- announce/re-announce run metadata. Called
@@ -23,7 +26,7 @@ Talks to the two write endpoints in Application/Server/src/app.js:
                                      log -- see Server/src/schema.sql).
 
 Uses only the standard library (urllib) -- no new pip dependency for
-something that's off unless explicitly configured.
+something every user now needs.
 """
 import json
 import urllib.error

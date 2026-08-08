@@ -19,15 +19,16 @@ Also lightly tracks the lifetime Profile file (separately, in profile_state.json
 profile_history.jsonl) since a Profile change (TotalRunsBeaten incrementing) is
 useful corroborating evidence for whether a just-ended run was a win.
 
-Optionally uploads to the Step 3 REST server (Application/Server) via
-guildrun_uploader.py -- off by default, enabled by setting GUILDRUN_API_URL
-(and GUILDRUN_API_KEY) either in the environment or in config.env next to
-this script/executable (auto-created with blank placeholders on first launch
--- see guildrun_common.ensure_config_template; environment variables win if
-both are set). When enabled, syncs at most every --sync-every seconds while a
-run is active, plus once immediately whenever a run ends (its final
-status/ended_at) or gets retroactively corrected by the profile-diff victory
-fix-up.
+Uploads to the Step 3 REST server (Application/Server) via
+guildrun_uploader.py -- required, not optional (as of 2026-08-08 there's no
+local-only mode). GUILDRUN_API_URL and GUILDRUN_API_KEY come from the
+environment or config.env next to this script/executable; if either is
+missing, main() prompts for it interactively on startup and saves the
+answer to config.env (see guildrun_common.ensure_credentials) so it isn't
+asked again. Environment variables win if both are set. Syncs at most every
+--sync-every seconds while a run is active, plus once immediately whenever a
+run ends (its final status/ended_at) or gets retroactively corrected by the
+profile-diff victory fix-up.
 
 Output layout, all under a `run_data/` folder next to this script (or next to
 the executable, when packaged -- see guildrun_common.get_app_dir):
@@ -41,13 +42,13 @@ unsynced run's local copy (its only copy) is never deleted regardless of age.
 
 Usage:
   pip install msgpack --break-system-packages
-  python3 guildrun_state_watcher.py                     # poll every 1s (default)
+  python3 guildrun_state_watcher.py                     # prompts for GUILDRUN_API_URL/KEY on first run
   python3 guildrun_state_watcher.py --interval 1
   python3 guildrun_state_watcher.py --snapshot-every 30  # periodic full-state checkpoint cadence, seconds
   python3 guildrun_state_watcher.py --keep-runs 100      # local run history to retain (0 disables cleanup)
 
-  # To also upload to the Step 3 server, either edit config.env (created on
-  # first launch) or set environment variables:
+  # To skip the interactive prompt (e.g. scripted/CI use), set both up front,
+  # either as environment variables or in config.env:
   export GUILDRUN_API_URL=http://localhost:3000
   export GUILDRUN_API_KEY=dev-local-key    # must match Server/.env's UPLOAD_API_KEY
   python3 guildrun_state_watcher.py --sync-every 10
@@ -577,9 +578,13 @@ def main():
 
     os.makedirs(RUNS_DIR, exist_ok=True)
 
-    if gc.ensure_config_template():
-        print(f"Created {gc.CONFIG_PATH} -- fill in GUILDRUN_API_URL/GUILDRUN_API_KEY there "
-              f"to upload your runs, then restart GRP. Running local-only for now.\n")
+    gc.ensure_config_template()
+    config = gc.ensure_credentials(gc.load_config())
+    # uploader.API_URL/API_KEY were already computed once at import time
+    # (before config.env necessarily had real values, or before the prompt
+    # above ran) -- refresh them now that credentials are guaranteed present.
+    uploader.API_URL = gc.get_setting("GUILDRUN_API_URL", config).rstrip("/")
+    uploader.API_KEY = gc.get_setting("GUILDRUN_API_KEY", config)
 
     print(gc.diagnose_data_paths() + "\n")
 
@@ -594,10 +599,7 @@ def main():
     print(f"Game version: {watcher.game_version}")
     print(f"Parser version: {gc.PARSER_VERSION}")
     print(f"Polling every {args.interval}s. Data -> {DATA_DIR}")
-    if uploader.enabled():
-        print(f"Uploading to {uploader.API_URL} at most every {args.sync_every}s.")
-    else:
-        print("Uploading disabled (set GUILDRUN_API_URL to enable).")
+    print(f"Uploading to {uploader.API_URL} at most every {args.sync_every}s.")
     gc.check_for_update(uploader.API_URL)
     print("Press Ctrl+C to stop.\n")
 

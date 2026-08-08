@@ -72,10 +72,11 @@ def check_for_update(api_url, timeout=3.0):
 CONFIG_TEMPLATE = """\
 # Guildrun Run Parser (GRP) configuration.
 #
-# Fill in GUILDRUN_API_URL and GUILDRUN_API_KEY to upload your runs to the
-# web site, then restart GRP. Leave GUILDRUN_API_URL blank to run locally
-# only (no uploading) -- GRP still tracks your runs on this machine either
-# way, in the run_data/ folder next to this file.
+# GRP prompts you for GUILDRUN_API_URL and GUILDRUN_API_KEY the first time
+# it runs without them and saves your answers below -- you shouldn't
+# normally need to touch those two lines by hand. If you ever need to
+# change them later (new key, different site), edit them directly here and
+# restart GRP.
 #
 # GRP looks for your Guildrun save data in its usual OS-specific location
 # automatically -- you should NOT need to touch GUILDRUN_DATA_DIR below. If
@@ -87,7 +88,8 @@ CONFIG_TEMPLATE = """\
 # then restart GRP. Please also report this to the developer -- it means
 # GRP's default guess for your OS needs fixing for everyone else too.
 #
-# Environment variables of the same name, if set, always override this file.
+# Environment variables of the same name, if set, always override this file
+# (and are never prompted for or written here).
 
 GUILDRUN_API_URL=
 GUILDRUN_API_KEY=
@@ -121,8 +123,9 @@ def ensure_config_template():
 
 def load_config():
     """Parse config.env (simple KEY=value lines, '#' comments) into a dict.
-    Missing file just means an empty config -- not an error, since running
-    fully local with no uploading is a valid setup."""
+    A missing file just means an empty config (ensure_config_template
+    creates one before this is ever called for real, so this mainly matters
+    for callers that haven't done that yet)."""
     config = {}
     if not os.path.isfile(CONFIG_PATH):
         return config
@@ -139,6 +142,69 @@ def load_config():
 def get_setting(key, config):
     """Environment variable wins if set; otherwise falls back to config.env."""
     return os.environ.get(key) or config.get(key, "")
+
+
+def _write_config_values(updates):
+    """Rewrites specific KEY=value lines in config.env in place, leaving
+    everything else (comments, GUILDRUN_DATA_DIR, formatting) untouched --
+    doesn't just regenerate the whole file from CONFIG_TEMPLATE, since the
+    user may have already hand-edited it (e.g. set GUILDRUN_DATA_DIR)."""
+    if not os.path.isfile(CONFIG_PATH):
+        with open(CONFIG_PATH, "w") as f:
+            f.write(CONFIG_TEMPLATE)
+
+    with open(CONFIG_PATH) as f:
+        lines = f.readlines()
+
+    remaining = dict(updates)
+    for i, line in enumerate(lines):
+        stripped = line.strip()
+        if not stripped or stripped.startswith("#") or "=" not in stripped:
+            continue
+        key = stripped.split("=", 1)[0].strip()
+        if key in remaining:
+            lines[i] = f"{key}={remaining.pop(key)}\n"
+
+    # Shouldn't normally happen (CONFIG_TEMPLATE always has both keys
+    # already), but don't silently drop an update if the file was edited
+    # into some other shape.
+    for key, value in remaining.items():
+        lines.append(f"{key}={value}\n")
+
+    with open(CONFIG_PATH, "w") as f:
+        f.writelines(lines)
+
+
+def ensure_credentials(config):
+    """GRP requires GUILDRUN_API_URL and GUILDRUN_API_KEY to run at all
+    (added 2026-08-08 -- there's no more local-only mode). If either is
+    missing from both the environment and config.env, prompts for it in the
+    terminal and saves the answer to config.env so it isn't asked again.
+    Environment variables are never prompted for or written back (they
+    already win over the file per get_setting, and overwriting the file
+    with an env-sourced value would be surprising if the env var were later
+    unset). Returns the config dict with both keys present."""
+    url = get_setting("GUILDRUN_API_URL", config)
+    key = get_setting("GUILDRUN_API_KEY", config)
+    if url and key:
+        return config
+
+    print("GRP needs an upload URL and key to run -- it no longer runs in a local-only mode.")
+    updates = {}
+    if not url:
+        while not url:
+            url = input("  GUILDRUN_API_URL (the site's address, e.g. https://guildrunlogs.example.com): ").strip()
+        updates["GUILDRUN_API_URL"] = url
+        config["GUILDRUN_API_URL"] = url
+    if not key:
+        while not key:
+            key = input("  GUILDRUN_API_KEY (generate one from your profile page on the site): ").strip()
+        updates["GUILDRUN_API_KEY"] = key
+        config["GUILDRUN_API_KEY"] = key
+
+    _write_config_values(updates)
+    print(f"Saved to {CONFIG_PATH} -- edit that file any time to change these.\n")
+    return config
 
 
 # Confirmed on macOS (2026-08-07/08, direct inspection of a real install):
