@@ -12,6 +12,7 @@ import glob
 import json
 import os
 import re
+import shutil
 import sys
 import urllib.error
 import urllib.request
@@ -97,14 +98,58 @@ GUILDRUN_DATA_DIR=
 """
 
 
-def get_app_dir():
-    """Directory to read config.env / write run_data from -- next to the
-    executable when packaged (PyInstaller sets sys.frozen), next to this
-    script otherwise. Not just os.getcwd(), so a packaged .exe behaves the
-    same double-clicked from anywhere as it does run from a terminal."""
+def _legacy_app_dir():
+    """Where config.env/run_data lived before 2026-08-08 -- next to the
+    executable when packaged, next to this script otherwise. Kept only so
+    get_app_dir() can migrate an existing install's data over once."""
     if getattr(sys, "frozen", False):
         return os.path.dirname(sys.executable)
     return os.path.dirname(os.path.abspath(__file__))
+
+
+def _migrate_legacy_app_dir(app_dir):
+    """One-time move of an existing install's config.env/run_data from the
+    old next-to-the-executable location into the new fixed one, so nobody's
+    saved upload key or local run history gets orphaned by this change.
+    No-ops if the new location already has a config.env (already migrated,
+    or a genuinely fresh install writes its own) or there's nothing at the
+    old location to migrate (also a fresh install)."""
+    new_config = os.path.join(app_dir, "config.env")
+    if os.path.isfile(new_config):
+        return
+    legacy_dir = _legacy_app_dir()
+    legacy_config = os.path.join(legacy_dir, "config.env")
+    if not os.path.isfile(legacy_config):
+        return
+
+    print(f"Moving existing config.env (and run_data/, if present) from {legacy_dir} to {app_dir}.\n")
+    shutil.move(legacy_config, new_config)
+    legacy_run_data = os.path.join(legacy_dir, "run_data")
+    if os.path.isdir(legacy_run_data):
+        shutil.move(legacy_run_data, os.path.join(app_dir, "run_data"))
+
+
+def get_app_dir():
+    """Fixed, OS-standard per-user directory for config.env and run_data/ --
+    changed 2026-08-08 from "next to the executable." Two reasons: (1) a
+    bare exe left loose in someone's Downloads folder would otherwise
+    scatter config.env/run_data right there; (2) GRP now ships as a folder
+    (see Watcher/.github/workflows/build.yml), and "updating" means
+    extracting a new one, which would orphan the old config.env/run_data if
+    they lived inside the old folder instead of somewhere stable.
+    Migrates an existing pre-2026-08-08 install's data automatically --
+    see _migrate_legacy_app_dir."""
+    if sys.platform == "win32":
+        base = os.environ.get("APPDATA") or os.path.expanduser("~")
+    elif sys.platform == "darwin":
+        base = os.path.expanduser("~/Library/Application Support")
+    else:
+        base = os.environ.get("XDG_CONFIG_HOME") or os.path.expanduser("~/.config")
+    app_dir = os.path.join(base, "GRP")
+
+    os.makedirs(app_dir, exist_ok=True)
+    _migrate_legacy_app_dir(app_dir)
+    return app_dir
 
 
 CONFIG_PATH = os.path.join(get_app_dir(), "config.env")

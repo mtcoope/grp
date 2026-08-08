@@ -1,14 +1,21 @@
 name: Build GRP
 
-# Builds a single portable executable for Windows and macOS via PyInstaller.
-# Added 2026-08-08 -- PyInstaller can't cross-compile (a build run on macOS
-# only produces a macOS binary), so this uses GitHub's own windows-latest and
-# macos-latest runners to build each platform's binary natively, without
-# needing a real Windows machine.
+# Builds guildrunlogs/, a folder containing a single portable PyInstaller
+# executable, zipped for distribution -- changed 2026-08-08 from shipping
+# the bare executable directly. Reasoning: a bare exe left loose in
+# someone's Downloads folder read as a stray unnamed file, not obviously
+# "the GRP app"; wrapping it in a clearly-named folder fixes that. (Where
+# config.env/run_data actually live is a separate fix, unrelated to this
+# packaging change -- see guildrun_common.get_app_dir's 2026-08-08 history.)
+#
+# PyInstaller can't cross-compile (a build run on macOS only produces a
+# macOS binary), so this uses GitHub's own windows-latest and macos-latest
+# runners to build each platform's binary natively, without needing a real
+# Windows machine.
 #
 # Runs on every push to main (for quick build-health feedback) and on
-# version tags (v*), where it also attaches both binaries to a GitHub
-# Release. Push a tag to cut a release:
+# version tags (v*), where it also attaches both platforms' zips to a
+# GitHub Release. Push a tag to cut a release:
 #   git tag v0.1.0 && git push origin v0.1.0
 
 on:
@@ -24,10 +31,10 @@ jobs:
         include:
           - os: windows-latest
             artifact_name: guildrun-run-parser.exe
-            asset_name: guildrun-run-parser-windows.exe
+            asset_name: guildrunlogs-windows.zip
           - os: macos-latest
             artifact_name: guildrun-run-parser
-            asset_name: guildrun-run-parser-macos
+            asset_name: guildrunlogs-macos.zip
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
@@ -42,9 +49,28 @@ jobs:
       - name: Build
         run: pyinstaller --onefile --name guildrun-run-parser guildrun_state_watcher.py
 
-      - name: Rename for upload
+      - name: Package into guildrunlogs/ folder
         shell: bash
-        run: cp "dist/${{ matrix.artifact_name }}" "${{ matrix.asset_name }}"
+        run: |
+          mkdir guildrunlogs
+          cp "dist/${{ matrix.artifact_name }}" guildrunlogs/
+
+      - name: Zip (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: Compress-Archive -Path guildrunlogs -DestinationPath "${{ matrix.asset_name }}"
+
+      - name: Zip (macOS)
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          # zip preserves Unix file-mode bits (including +x) in the
+          # archive -- unlike a bare-file HTTP download, unzip on the other
+          # end restores them, so this also sidesteps needing a manual
+          # chmod +x after extracting. Set explicitly first as insurance,
+          # though PyInstaller's own output should already be executable.
+          chmod +x "guildrunlogs/${{ matrix.artifact_name }}"
+          zip -r "${{ matrix.asset_name }}" guildrunlogs
 
       - uses: actions/upload-artifact@v4
         with:
