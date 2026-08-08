@@ -581,6 +581,8 @@ def main():
         print(f"Created {gc.CONFIG_PATH} -- fill in GUILDRUN_API_URL/GUILDRUN_API_KEY there "
               f"to upload your runs, then restart GRP. Running local-only for now.\n")
 
+    print(gc.diagnose_data_paths() + "\n")
+
     if args.keep_runs > 0:
         result = cleanup_old_runs(keep_count=args.keep_runs)
         if result["deleted"]:

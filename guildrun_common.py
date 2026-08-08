@@ -28,10 +28,21 @@ CONFIG_TEMPLATE = """\
 # only (no uploading) -- GRP still tracks your runs on this machine either
 # way, in the run_data/ folder next to this file.
 #
+# GRP looks for your Guildrun save data in its usual OS-specific location
+# automatically -- you should NOT need to touch GUILDRUN_DATA_DIR below. If
+# GRP prints "Could not find a Guildrun save folder" when you launch it,
+# that guess was wrong for your system. Find your actual save folder
+# yourself (it should contain a "Saves" folder with a "steam-<numbers>"
+# folder inside it, and a Player.log) and paste that path here, e.g.
+#   GUILDRUN_DATA_DIR=C:\\Users\\you\\AppData\\LocalLow\\Leyline\\Guildrun
+# then restart GRP. Please also report this to the developer -- it means
+# GRP's default guess for your OS needs fixing for everyone else too.
+#
 # Environment variables of the same name, if set, always override this file.
 
 GUILDRUN_API_URL=
 GUILDRUN_API_KEY=
+GUILDRUN_DATA_DIR=
 """
 
 
@@ -80,15 +91,52 @@ def get_setting(key, config):
     """Environment variable wins if set; otherwise falls back to config.env."""
     return os.environ.get(key) or config.get(key, "")
 
-PROFILE_GLOB = os.path.expanduser(
-    "~/Library/Application Support/Leyline/Guildrun/Saves/steam-*/Profile"
-)
-RUN_GLOB = os.path.expanduser(
-    "~/Library/Application Support/Leyline/Guildrun/Saves/steam-*/Run"
-)
-PLAYER_LOG_PATH = os.path.expanduser(
-    "~/Library/Logs/Leyline/Guildrun/Player.log"
-)
+
+# Confirmed on macOS (2026-08-07/08, direct inspection of a real install):
+# ~/Library/Application Support/Leyline/Guildrun/... -- exactly Unity's
+# documented Application.persistentDataPath convention for macOS
+# (~/Library/Application Support/<CompanyName>/<ProductName>).
+#
+# The Windows paths below are NOT independently verified against a real
+# Windows install -- there's no Windows machine in this dev loop to test
+# against, and a web search turned up no public documentation of Guildrun's
+# specific save location. They're inferred from Unity's own documented,
+# consistently-enforced cross-platform convention (persistentDataPath ->
+# %USERPROFILE%\AppData\LocalLow\<CompanyName>\<ProductName> on Windows;
+# Player.log lives in that same folder on Windows, unlike macOS's separate
+# ~/Library/Logs/ location) -- high confidence in the general Unity
+# convention, but this specific game could still deviate. **Needs real
+# verification on an actual Windows machine before trusting the Windows
+# build finds anything.**
+#
+# GUILDRUN_DATA_DIR (config.env or env var) overrides the guess entirely --
+# added 2026-08-08 as a safety net for exactly that uncertainty, so a wrong
+# guess is a one-line config edit for the affected player, not a rebuild.
+# Assumes Saves/ and Player.log share that one root, true on Windows
+# (LocalLow) and true if this guess is right -- not applicable on macOS,
+# which doesn't need it since that path is already confirmed.
+_config = load_config()
+_data_dir_override = get_setting("GUILDRUN_DATA_DIR", _config)
+
+if _data_dir_override:
+    PROFILE_GLOB = os.path.join(_data_dir_override, "Saves", "steam-*", "Profile")
+    RUN_GLOB = os.path.join(_data_dir_override, "Saves", "steam-*", "Run")
+    PLAYER_LOG_PATH = os.path.join(_data_dir_override, "Player.log")
+elif sys.platform == "win32":
+    _APPDATA_LOCALLOW = os.path.join(os.environ.get("USERPROFILE", "~"), "AppData", "LocalLow")
+    PROFILE_GLOB = os.path.join(_APPDATA_LOCALLOW, "Leyline", "Guildrun", "Saves", "steam-*", "Profile")
+    RUN_GLOB = os.path.join(_APPDATA_LOCALLOW, "Leyline", "Guildrun", "Saves", "steam-*", "Run")
+    PLAYER_LOG_PATH = os.path.join(_APPDATA_LOCALLOW, "Leyline", "Guildrun", "Player.log")
+else:
+    PROFILE_GLOB = os.path.expanduser(
+        "~/Library/Application Support/Leyline/Guildrun/Saves/steam-*/Profile"
+    )
+    RUN_GLOB = os.path.expanduser(
+        "~/Library/Application Support/Leyline/Guildrun/Saves/steam-*/Run"
+    )
+    PLAYER_LOG_PATH = os.path.expanduser(
+        "~/Library/Logs/Leyline/Guildrun/Player.log"
+    )
 
 STEAM_ID_RE = re.compile(r"steam-(\d+)")
 
@@ -101,6 +149,30 @@ def find_run_path():
 def find_profile_path():
     matches = glob.glob(PROFILE_GLOB)
     return matches[0] if matches else None
+
+
+def diagnose_data_paths():
+    """One-time, human-readable check of whether the platform-specific paths
+    above actually point at something -- added 2026-08-08 because those paths
+    are guessed (not verified) on Windows, see the comment above PROFILE_GLOB.
+    Distinguishes "no save folder at all" (probably a wrong-path bug -- please
+    report the real path) from "found it, just no active run right now"
+    (totally normal). Meant to be printed once at startup, not polled."""
+    saves_root = os.path.dirname(os.path.dirname(RUN_GLOB))  # .../Guildrun/Saves
+    if not os.path.isdir(saves_root):
+        return (
+            f"Could not find a Guildrun save folder at {saves_root}\n"
+            f"  If Guildrun is installed and you've played at least once, this path is "
+            f"probably wrong for your system. Find your real save folder (look for one "
+            f"containing a 'Saves' folder with a 'steam-<numbers>' folder inside it, and "
+            f"a Player.log) and set GUILDRUN_DATA_DIR to it in {CONFIG_PATH}, then "
+            f"restart. Please also report this to the developer -- it means the default "
+            f"guess needs fixing for everyone else on your OS too."
+        )
+    steam_dirs = glob.glob(os.path.join(saves_root, "steam-*"))
+    if not steam_dirs:
+        return f"Found {saves_root}, but no steam-<id> folder inside it yet -- try launching Guildrun at least once first."
+    return f"Found Guildrun save data at {steam_dirs[0]}"
 
 
 def extract_steam_id(path):
