@@ -63,7 +63,7 @@ def _post(path, body):
             "authorization": f"Bearer {API_KEY}",
         },
     )
-    with urllib.request.urlopen(req, timeout=TIMEOUT) as resp:
+    with gc.urlopen(req, timeout=TIMEOUT) as resp:
         return json.loads(resp.read().decode("utf-8"))
 
 

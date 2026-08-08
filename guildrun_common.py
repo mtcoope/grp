@@ -13,6 +13,7 @@ import json
 import os
 import re
 import shutil
+import ssl
 import sys
 import urllib.error
 import urllib.request
@@ -22,7 +23,31 @@ try:
 except ImportError:
     raise SystemExit("Missing dependency. Run: pip install msgpack --break-system-packages")
 
-PARSER_VERSION = "0.1.0"
+try:
+    import certifi
+except ImportError:
+    raise SystemExit("Missing dependency. Run: pip install certifi --break-system-packages")
+
+PARSER_VERSION = "0.1.1"
+
+# Explicit CA bundle for every HTTPS request GRP makes, added 2026-08-08 after
+# a real report: Python's ssl module falls back to an OS-provided trust store
+# by default, and python.org's macOS installer doesn't wire one up at all
+# (no post-install step run == no CA file on disk whatsoever, not just a
+# stale one) -- every request fails with CERTIFICATE_VERIFY_FAILED /
+# "unable to get local issuer certificate", not just guildrunlogs.app's.
+# certifi ships its own maintained bundle instead of relying on the OS having
+# one, which also matters for the packaged --onefile binary (guildrun_common
+# has no access to python.org's installer or the user's browser's trust
+# store either way). PyInstaller has a built-in hook for certifi that bundles
+# its cacert.pem automatically -- no extra --add-data needed in build.yml.
+_SSL_CONTEXT = ssl.create_default_context(cafile=certifi.where())
+
+
+def urlopen(req, timeout):
+    """The one place every HTTPS request in GRP should go through, so the
+    certifi-backed context above is never accidentally skipped."""
+    return urllib.request.urlopen(req, timeout=timeout, context=_SSL_CONTEXT)
 
 
 def _parse_version(v):
@@ -58,7 +83,7 @@ def check_for_update(api_url, timeout=3.0):
     try:
         url = f"{api_url.rstrip('/')}/downloads/latest_version.json"
         req = urllib.request.Request(url, headers={"user-agent": "guildrun-run-parser"})
-        with urllib.request.urlopen(req, timeout=timeout) as resp:
+        with urlopen(req, timeout=timeout) as resp:
             data = json.loads(resp.read().decode("utf-8"))
         latest = str(data.get("version") or "")
         if latest and _parse_version(latest) > _parse_version(PARSER_VERSION):
