@@ -1,10 +1,13 @@
 """
 Guildrun Step 3 uploader.
 
-Optional, off by default. Enabled by setting GUILDRUN_API_URL in the
-environment (e.g. http://localhost:3000); GUILDRUN_API_KEY must also be set in
-that case (matches Application/Server/.env's UPLOAD_API_KEY -- a placeholder
-shared secret, not per-player auth -- see Server/.env.example).
+Optional, off by default. Enabled by setting GUILDRUN_API_URL (e.g.
+http://localhost:3000) and GUILDRUN_API_KEY (matches Application/Server/.env's
+UPLOAD_API_KEY -- a placeholder shared secret, not per-player auth -- see
+Server/.env.example), either as environment variables or in config.env next
+to this script/executable (see guildrun_common.ensure_config_template) --
+added 2026-08-08 so a packaged .exe has somewhere to put these without a
+terminal. Environment variables win if both are set.
 
 Talks to the two write endpoints in Application/Server/src/app.js:
   POST /api/runs                 -- announce/re-announce run metadata. Called
@@ -23,13 +26,15 @@ Uses only the standard library (urllib) -- no new pip dependency for
 something that's off unless explicitly configured.
 """
 import json
-import os
 import urllib.error
 import urllib.request
 from datetime import datetime, timezone
 
-API_URL = os.environ.get("GUILDRUN_API_URL", "").rstrip("/")
-API_KEY = os.environ.get("GUILDRUN_API_KEY", "")
+import guildrun_common as gc
+
+_config = gc.load_config()
+API_URL = gc.get_setting("GUILDRUN_API_URL", _config).rstrip("/")
+API_KEY = gc.get_setting("GUILDRUN_API_KEY", _config)
 TIMEOUT = 5.0
 
 

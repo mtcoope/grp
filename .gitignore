@@ -2,6 +2,12 @@ __pycache__/
 *.pyc
 .DS_Store
 .env
+config.env
 
 # Personal gameplay data captured by the watcher -- never commit this.
 run_data/
+
+# PyInstaller build output.
+build/
+dist/
+*.spec

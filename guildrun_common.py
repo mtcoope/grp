@@ -11,6 +11,7 @@ locations, formats, and open questions this is based on.
 import glob
 import os
 import re
+import sys
 
 try:
     import msgpack
@@ -18,6 +19,66 @@ except ImportError:
     raise SystemExit("Missing dependency. Run: pip install msgpack --break-system-packages")
 
 PARSER_VERSION = "0.1.0"
+
+CONFIG_TEMPLATE = """\
+# Guildrun Run Parser (GRP) configuration.
+#
+# Fill in GUILDRUN_API_URL and GUILDRUN_API_KEY to upload your runs to the
+# web site, then restart GRP. Leave GUILDRUN_API_URL blank to run locally
+# only (no uploading) -- GRP still tracks your runs on this machine either
+# way, in the run_data/ folder next to this file.
+#
+# Environment variables of the same name, if set, always override this file.
+
+GUILDRUN_API_URL=
+GUILDRUN_API_KEY=
+"""
+
+
+def get_app_dir():
+    """Directory to read config.env / write run_data from -- next to the
+    executable when packaged (PyInstaller sets sys.frozen), next to this
+    script otherwise. Not just os.getcwd(), so a packaged .exe behaves the
+    same double-clicked from anywhere as it does run from a terminal."""
+    if getattr(sys, "frozen", False):
+        return os.path.dirname(sys.executable)
+    return os.path.dirname(os.path.abspath(__file__))
+
+
+CONFIG_PATH = os.path.join(get_app_dir(), "config.env")
+
+
+def ensure_config_template():
+    """Create config.env with placeholder values if it doesn't exist yet.
+    Returns True if it just created one (caller should tell the user to fill
+    it in), False if one already existed."""
+    if os.path.isfile(CONFIG_PATH):
+        return False
+    with open(CONFIG_PATH, "w") as f:
+        f.write(CONFIG_TEMPLATE)
+    return True
+
+
+def load_config():
+    """Parse config.env (simple KEY=value lines, '#' comments) into a dict.
+    Missing file just means an empty config -- not an error, since running
+    fully local with no uploading is a valid setup."""
+    config = {}
+    if not os.path.isfile(CONFIG_PATH):
+        return config
+    with open(CONFIG_PATH) as f:
+        for line in f:
+            line = line.strip()
+            if not line or line.startswith("#") or "=" not in line:
+                continue
+            key, _, value = line.partition("=")
+            config[key.strip()] = value.strip()
+    return config
+
+
+def get_setting(key, config):
+    """Environment variable wins if set; otherwise falls back to config.env."""
+    return os.environ.get(key) or config.get(key, "")
 
 PROFILE_GLOB = os.path.expanduser(
     "~/Library/Application Support/Leyline/Guildrun/Saves/steam-*/Profile"

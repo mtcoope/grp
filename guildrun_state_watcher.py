@@ -21,12 +21,16 @@ useful corroborating evidence for whether a just-ended run was a win.
 
 Optionally uploads to the Step 3 REST server (Application/Server) via
 guildrun_uploader.py -- off by default, enabled by setting GUILDRUN_API_URL
-(and GUILDRUN_API_KEY) in the environment. When enabled, syncs at most every
---sync-every seconds while a run is active, plus once immediately whenever a
-run ends (its final status/ended_at) or gets retroactively corrected by the
-profile-diff victory fix-up.
+(and GUILDRUN_API_KEY) either in the environment or in config.env next to
+this script/executable (auto-created with blank placeholders on first launch
+-- see guildrun_common.ensure_config_template; environment variables win if
+both are set). When enabled, syncs at most every --sync-every seconds while a
+run is active, plus once immediately whenever a run ends (its final
+status/ended_at) or gets retroactively corrected by the profile-diff victory
+fix-up.
 
-Output layout, all under a `run_data/` folder next to this script:
+Output layout, all under a `run_data/` folder next to this script (or next to
+the executable, when packaged -- see guildrun_common.get_app_dir):
   run_data/runs/<run_id>.json
   run_data/profile_state.json        (latest raw Profile snapshot, overwritten)
   run_data/profile_history.jsonl     (append-only log of scalar Profile field changes)
@@ -42,7 +46,8 @@ Usage:
   python3 guildrun_state_watcher.py --snapshot-every 30  # periodic full-state checkpoint cadence, seconds
   python3 guildrun_state_watcher.py --keep-runs 100      # local run history to retain (0 disables cleanup)
 
-  # To also upload to the Step 3 server:
+  # To also upload to the Step 3 server, either edit config.env (created on
+  # first launch) or set environment variables:
   export GUILDRUN_API_URL=http://localhost:3000
   export GUILDRUN_API_KEY=dev-local-key    # must match Server/.env's UPLOAD_API_KEY
   python3 guildrun_state_watcher.py --sync-every 10
@@ -64,7 +69,7 @@ sys.path.insert(0, SCRIPT_DIR)
 import guildrun_common as gc
 import guildrun_uploader as uploader
 
-DATA_DIR = os.path.join(SCRIPT_DIR, "run_data")
+DATA_DIR = os.path.join(gc.get_app_dir(), "run_data")
 RUNS_DIR = os.path.join(DATA_DIR, "runs")
 PROFILE_STATE_PATH = os.path.join(DATA_DIR, "profile_state.json")
 PROFILE_HISTORY_PATH = os.path.join(DATA_DIR, "profile_history.jsonl")
@@ -571,6 +576,10 @@ def main():
     args = ap.parse_args()
 
     os.makedirs(RUNS_DIR, exist_ok=True)
+
+    if gc.ensure_config_template():
+        print(f"Created {gc.CONFIG_PATH} -- fill in GUILDRUN_API_URL/GUILDRUN_API_KEY there "
+              f"to upload your runs, then restart GRP. Running local-only for now.\n")
 
     if args.keep_runs > 0:
         result = cleanup_old_runs(keep_count=args.keep_runs)
