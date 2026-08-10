@@ -82,6 +82,20 @@ def announce_run(doc):
     })
 
 
+def upload_log(content, game_version):
+    """POST the current session's log content to /api/logs -- see
+    Server/src/app.js, which truncates to its own tail if oversized rather
+    than rejecting. Callers are expected to swallow failures themselves
+    (see guildrun_state_watcher.py's _upload_log_best_effort) -- a log
+    upload failing must never itself crash the thing trying to report a
+    problem."""
+    return _post("/api/logs", {
+        "parser_version": gc.PARSER_VERSION,
+        "game_version": game_version,
+        "content": content,
+    })
+
+
 def sync_events(doc):
     """Upload events since doc['sync']['sent_event_count'], plus the current
     status/summary/latest_raw_state/ended_at snapshot. Mutates doc['sync'] in

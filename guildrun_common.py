@@ -15,6 +15,7 @@ import re
 import shutil
 import ssl
 import sys
+import time
 import urllib.error
 import urllib.request
 
@@ -28,7 +29,7 @@ try:
 except ImportError:
     raise SystemExit("Missing dependency. Run: pip install certifi --break-system-packages")
 
-PARSER_VERSION = "0.1.2"
+PARSER_VERSION = "0.1.3"
 
 # Explicit CA bundle for every HTTPS request GRP makes, added 2026-08-08 after
 # a real report: Python's ssl module falls back to an OS-provided trust store
@@ -179,6 +180,56 @@ def get_app_dir():
     os.makedirs(app_dir, exist_ok=True)
     _migrate_legacy_app_dir(app_dir)
     return app_dir
+
+
+def get_logs_dir():
+    """One log file per launch lives here (see guildrun_state_watcher.py's
+    Tee setup) -- same app_dir convention as config.env/run_data above."""
+    logs_dir = os.path.join(get_app_dir(), "logs")
+    os.makedirs(logs_dir, exist_ok=True)
+    return logs_dir
+
+
+class Tee:
+    """File-like object that duplicates every write to several underlying
+    streams. Installed over sys.stdout/sys.stderr in main() so the entire
+    console session -- including Python's own unhandled-exception traceback,
+    which is written via sys.stderr by the default excepthook before the
+    process exits -- ends up in a local log file too, without touching any
+    of the many existing print() call sites. Added 2026-08-09 after a real
+    Windows crash (a PermissionError from the file-locking race documented
+    on load_msgpack) was only visible because the user happened to
+    screenshot their terminal."""
+
+    def __init__(self, *streams):
+        self.streams = streams
+
+    def write(self, data):
+        for s in self.streams:
+            s.write(data)
+            s.flush()
+
+    def flush(self):
+        for s in self.streams:
+            s.flush()
+
+
+def cleanup_old_logs(keep_count=20):
+    """Delete old logs/*.log files beyond the most recent `keep_count`
+    (by filename, which is a launch timestamp -- see guildrun_state_watcher.py),
+    same reasoning/pattern as guildrun_state_watcher.cleanup_old_runs: one
+    file per launch, so this grows unbounded over time otherwise. Unlike
+    run files there's no "already synced?" check -- logs are fire-and-forget
+    telemetry, not the only copy of anything worth keeping."""
+    paths = sorted(glob.glob(os.path.join(get_logs_dir(), "*.log")), reverse=True)
+    deleted = 0
+    for path in paths[keep_count:]:
+        try:
+            os.remove(path)
+            deleted += 1
+        except OSError:
+            pass
+    return deleted
 
 
 CONFIG_PATH = os.path.join(get_app_dir(), "config.env")
@@ -376,10 +427,29 @@ def extract_steam_id(path):
     return m.group(1) if m else None
 
 
-def load_msgpack(path):
-    with open(path, "rb") as f:
-        data = f.read()
-    return msgpack.unpackb(data, raw=False, strict_map_key=False)
+def load_msgpack(path, retries=5, retry_delay=0.2):
+    """Reads and decodes one MessagePack file. Retries briefly on OSError --
+    confirmed 2026-08-09 via a real crash report from a Windows user: unlike
+    POSIX (no mandatory locking, a concurrent read just sees whatever bytes
+    are on disk), Windows enforces mandatory file locking, so a read that
+    lands in the brief window while the game itself has the file open for
+    writing fails outright with PermissionError instead. The game finishes
+    writing fast, so a short retry clears it almost every time; if it's
+    still locked after retries, re-raising is correct -- the main poll loop
+    now also catches this (see guildrun_state_watcher.py's main()) and
+    treats it as "try again next poll" rather than crashing the whole
+    watcher, so this retry is the fast/quiet path, not the only safety net."""
+    last_err = None
+    for attempt in range(retries):
+        try:
+            with open(path, "rb") as f:
+                data = f.read()
+            return msgpack.unpackb(data, raw=False, strict_map_key=False)
+        except OSError as e:
+            last_err = e
+            if attempt < retries - 1:
+                time.sleep(retry_delay)
+    raise last_err
 
 
 def load_run_raw(path):

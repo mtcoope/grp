@@ -2,7 +2,7 @@
 """
 Guildrun local run/event watcher (Step 2).
 
-Polls the live Run save file every second (configurable), and for the currently
+Polls the live Run save file every 500ms (configurable), and for the currently
 active run maintains a single JSON file on disk containing:
 
   - metadata: parser_version, game_version, run_id, steam_user_id, status
@@ -45,7 +45,7 @@ unsynced run's local copy (its only copy) is never deleted regardless of age.
 Usage:
   pip install msgpack --break-system-packages
   python3 guildrun_state_watcher.py                     # prompts for GUILDRUN_API_KEY on first run
-  python3 guildrun_state_watcher.py --interval 1
+  python3 guildrun_state_watcher.py --interval 0.5
   python3 guildrun_state_watcher.py --snapshot-every 30  # periodic full-state checkpoint cadence, seconds
   python3 guildrun_state_watcher.py --keep-runs 100      # local run history to retain (0 disables cleanup)
 
@@ -61,7 +61,6 @@ Usage:
 import argparse
 import copy
 import glob
-import hashlib
 import json
 import os
 import sys
@@ -86,10 +85,20 @@ def now_iso():
     return datetime.now(timezone.utc).isoformat()
 
 
-def file_hash(path):
+def file_fingerprint(path):
+    """Cheap "did this file change" check -- stats the file instead of
+    opening/reading it. Swapped from a sha256-of-full-content hash
+    2026-08-09: this runs on every single poll (every --interval seconds,
+    default 1s) regardless of whether anything actually changed, so it was
+    by far the most frequent thing touching the Run file -- far more likely
+    to land in the Windows write-lock race (see load_msgpack's retry logic)
+    than the actual load_run_raw() read, which only happens once a change
+    is detected. (mtime_ns, size) together guard against a same-mtime
+    false negative on filesystems with coarse mtime resolution (size alone
+    can't catch an in-place edit that doesn't change length)."""
     try:
-        with open(path, "rb") as f:
-            return hashlib.sha256(f.read()).hexdigest()
+        st = os.stat(path)
+        return (st.st_mtime_ns, st.st_size)
     except OSError:
         return None
 
@@ -446,11 +455,11 @@ class Watcher:
         self.game_version = gc.get_game_version()
         self.current_run_id = None
         self.current_doc = None
-        self.last_run_hash = None
+        self.last_run_fingerprint = None
         self.last_snapshot_time = 0
         self.last_sync_time = 0
         self.most_recent_ended_run_id = None
-        self.last_profile_hash = None
+        self.last_profile_fingerprint = None
         self.last_profile_scalars = {}
         self.log = []  # simple in-memory log of human-readable lines, for CLI printing / tests
 
@@ -489,16 +498,16 @@ class Watcher:
         self.most_recent_ended_run_id = self.current_run_id
         self.current_run_id = None
         self.current_doc = None
-        self.last_run_hash = None
+        self.last_run_fingerprint = None
 
     def poll_once(self):
         run_path = gc.find_run_path()
-        run_hash = file_hash(run_path) if run_path else None
+        run_fingerprint = file_fingerprint(run_path) if run_path else None
 
         if run_path is None and self.current_run_id is not None:
             self._end_current_run()
 
-        elif run_path is not None and run_hash != self.last_run_hash:
+        elif run_path is not None and run_fingerprint != self.last_run_fingerprint:
             outer = gc.load_run_raw(run_path)
             payload = outer["Payload"]
             run_id = payload.get("RunSessionDto", {}).get("RunId")
@@ -545,18 +554,18 @@ class Watcher:
                 self.last_snapshot_time = time.time()
 
             atomic_write_json(run_doc_path(self.current_run_id), self.current_doc)
-            self.last_run_hash = run_hash
+            self.last_run_fingerprint = run_fingerprint
             self._sync(self.current_doc)
 
         profile_path = gc.find_profile_path()
         if profile_path:
-            p_hash = file_hash(profile_path)
-            if p_hash != self.last_profile_hash:
+            profile_fingerprint = file_fingerprint(profile_path)
+            if profile_fingerprint != self.last_profile_fingerprint:
                 self.last_profile_scalars = handle_profile_change(
                     profile_path, self.game_version, self.last_profile_scalars, self.most_recent_ended_run_id,
                     on_run_corrected=lambda doc: self._sync(doc, force=True),
                 )
-                self.last_profile_hash = p_hash
+                self.last_profile_fingerprint = profile_fingerprint
 
     def shutdown(self):
         if self.current_doc is not None:
@@ -564,9 +573,24 @@ class Watcher:
             self._sync(self.current_doc, force=True)
 
 
+def _upload_log_best_effort(log_path, game_version):
+    """Read the current session's log file and POST it to /api/logs. Never
+    raises -- called from the crash-recovery path itself, among other
+    places, so a log upload failing must never crash anything further."""
+    if not uploader.enabled():
+        return
+    try:
+        with open(log_path, "r", errors="replace") as f:
+            content = f.read()
+        if content.strip():
+            uploader.upload_log(content, game_version)
+    except Exception as e:
+        print(f"[{now_iso()}] log upload failed (will retry next cycle): {e}")
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("--interval", type=float, default=1.0, help="Poll interval in seconds (default: 1)")
+    ap.add_argument("--interval", type=float, default=0.5, help="Poll interval in seconds (default: 0.5)")
     ap.add_argument("--snapshot-every", type=float, default=30.0,
                      help="Seconds between periodic full-state 'snapshot' checkpoint events while a run is active (default: 30)")
     ap.add_argument("--sync-every", type=float, default=10.0,
@@ -578,9 +602,31 @@ def main():
                           "Only ever deletes runs already fully synced to the server -- an unsynced "
                           "run's local file is its only copy, so it's kept regardless of age. Pass 0 "
                           "to disable cleanup entirely.")
+    ap.add_argument("--log-sync-every", type=float, default=60.0,
+                     help="Minimum seconds between console-log upload attempts to the Step 3 server "
+                          "(default: 60), plus one best-effort attempt right after a caught poll "
+                          "failure and one final attempt on exit. Added 2026-08-09 so a crash like a "
+                          "real Windows PermissionError report is visible on the server, not just in "
+                          "whatever terminal the user happened to be looking at.")
+    ap.add_argument("--keep-logs", type=int, default=20,
+                     help="Local log files to retain in logs/ (default: 20), one per launch, oldest "
+                          "first. Pass 0 to disable cleanup entirely.")
     args = ap.parse_args()
 
     os.makedirs(RUNS_DIR, exist_ok=True)
+
+    # Mirror everything printed from here on into a local log file too --
+    # installed before any other output so the file matches exactly what a
+    # user would see in their terminal, including Python's own
+    # unhandled-exception traceback (written via sys.stderr by the default
+    # excepthook before the process exits). See guildrun_common.Tee.
+    log_path = os.path.join(gc.get_logs_dir(), f"watcher_{datetime.now().strftime('%Y-%m-%dT%H-%M-%S')}.log")
+    log_file = open(log_path, "a", encoding="utf-8")
+    sys.stdout = gc.Tee(sys.stdout, log_file)
+    sys.stderr = gc.Tee(sys.stderr, log_file)
+
+    if args.keep_logs > 0:
+        gc.cleanup_old_logs(keep_count=args.keep_logs)
 
     gc.ensure_config_template()
     config = gc.ensure_credentials(gc.load_config())
@@ -604,16 +650,39 @@ def main():
     print(f"Parser version: {gc.PARSER_VERSION}")
     print(f"Polling every {args.interval}s. Data -> {DATA_DIR}")
     print(f"Uploading to {uploader.API_URL} at most every {args.sync_every}s.")
+    print(f"Logging this session to {log_path}, uploaded at most every {args.log_sync_every}s.")
     gc.check_for_update(uploader.API_URL)
     print("Press Ctrl+C to stop.\n")
 
+    last_log_upload_time = 0
+
     try:
         while True:
-            watcher.poll_once()
+            try:
+                watcher.poll_once()
+            except Exception as e:
+                # Defense in depth alongside load_msgpack's own retry (see
+                # guildrun_common.py) -- confirmed 2026-08-09 via a real
+                # Windows crash report where a transient PermissionError
+                # (game holding an exclusive write lock at the exact instant
+                # we polled) went unhandled all the way up and killed the
+                # whole background watcher. A poll failing once is not fatal
+                # -- the same file will very likely read fine next cycle --
+                # so log and keep the process alive rather than exit.
+                print(f"[{now_iso()}] poll failed, will retry next cycle: {e}")
+                _upload_log_best_effort(log_path, watcher.game_version)
+                last_log_upload_time = time.time()
+
+            if time.time() - last_log_upload_time >= args.log_sync_every:
+                _upload_log_best_effort(log_path, watcher.game_version)
+                last_log_upload_time = time.time()
+
             time.sleep(args.interval)
     except KeyboardInterrupt:
         watcher.shutdown()
         print("\nStopped.")
+    finally:
+        _upload_log_best_effort(log_path, watcher.game_version)
 
 
 if __name__ == "__main__":
